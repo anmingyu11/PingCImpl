@@ -320,6 +320,7 @@ int main()
 }
 ```
 ----
+
 ####函数inet_ntoa
 ```C
 #include <stdio.h>
@@ -349,9 +350,421 @@ int main()
 
 inet_addr函数在执行过程中，在内部会申请内存并保存结果字符串，然后返回内存地址。所以调用完该函数应该将字符串复制到其他内存空间。因为再次调用该函数时，之前保存的字符串很有可能被覆盖。
 
-来源: 实验楼
-链接: https://www.shiyanlou.com/courses/305
-本课程内容，由作者授权实验楼发布，未经允许，禁止转载、下载及非法传播
-来源: 实验楼
-链接: https://www.shiyanlou.com/courses/305
-本课程内容，由作者授权实验楼发布，未经允许，禁止转载、下载及非法传播
+
+----
+####函数gethostbyname
+```
+#include <netdb.h>
+struct hostent * gethostbyname(const char * hostname);
+```
+
+该函数的作用是根据域名获取IP地址。
+
+成功时返回hostent结构体地址，失败时返回NULL指针。
+
+struct hosten结构体定义如下：
+
+```
+struct hostent{
+    char *          h_name;
+    char **     h_aliases;
+    char         h_addrtype;
+    char         h_length;
+    char **     h_addr_list;
+};
+```
+
+我们最关心的是h_addr_list成员，它保存的就是域名对应IP地址。由于一个域名对应的IP地址不止一个，所以h_addr_list成员是char **类型，相当于二维字符数组。
+
+实例:
+```
+#include <stdio.h>   
+#include <stdlib.h>   
+#include <netdb.h>   
+#include <sys/socket.h>   
+#include <arpa/inet.h>
+
+int main(int argc, char *argv[])
+{
+    struct hostent *host;
+
+    if (argc < 2)
+    {
+        printf("Use : %s <hostname> \n", argv[0]);
+        exit(1);
+    }
+
+    host = gethostbyname(argv[1]);
+
+    if(host == NULL){
+        return 1;
+    }
+    for (int i = 0; host->h_addr_list[i]; ++i)
+    {
+        printf("IP addr %d : %s \n", i + 1,
+               inet_ntoa(*(struct in_addr *)host->h_addr_list[i]));
+    }
+}
+```
+
+----
+
+####函数socket
+
+```
+#include <sys/socket.h>
+int socket(int family, int type, int protocol);
+```
+
+成功时返回文件描述符，失败时返回-1。
+
+该函数的作用是创建一个套接字。一般为了执行网络I/O，一个进程必须做的第一件事就是调用socket函数。
+
+- 第一个参数family：指明套接字中使用的协议族信息。
+
+常见值有:
+
+|family|说明|
+|----|----|
+|AF_INET|IPv4协议|
+|AF_INET6|IPv6协议|
+|AF_LOCAL|Unix域协议|
+|AF_ROUTE|路由套接口|
+
+- 第二个参数type：指明套接口类型，也即套接字的数据传输方式。
+
+常见值有：
+
+|type|说明|
+|----|----|
+|SOCK_STREAM|字节流套接口|
+|SOCK_DGRAM|数据报套接口|
+|SOCK_RAW|原始套接口|
+
+在常见的使用socket进行网络编程中，经常使用SOCK_STREAM和SOCK_DGRAM，也就是TCP和UDP编程。在本项目中，我们将使用SOCK_RAW（原始套接字）。
+
+原始套接字的主要作用在三个方面：
+
+1.通过原始套接字发送/接收 ICMP 协议包。
+2.接收发向本级的，但 TCP/IP 协议栈不能处理的IP包。
+3.用来发送一些自己制定源地址特殊作用的IP包（自己写IP头）。
+
+ping 命令使用的就是 ICMP 协议，因此我们不能直接通过建立一个 SOCK_STREAM或SOCK_DGRAM 来发送协议包，只能自己构建 ICMP 包通过 SOCK_RAW 来发送。
+
+- 第三个参数 protocol：指明协议类型。
+
+常见值有：
+
+|protocol|说明|
+|----|----|
+|IPPROTO_TCP|TCP传输协议|
+|IPPROTO_UDP|UDP传输协议|
+|IPPROTO_ICMP|ICMP传输协议|
+
+参数 protocol 指明了所要接收的协议包。
+
+如果指定了 IPPROTO_ICMP，则内核碰到ip头中 protocol 域和创建 socket 所使用参数 protocol 相同的 IP 包，就会交给我们创建的原始套接字来处理。
+
+因此，一般来说，要想接收什么样的数据包，就应该在参数protocol里来指定相应的协议。当内核向我们创建的原始套接字交付数据包的时候，是包括整个IP头的，并且是已经重组好的IP包。如下所示：
+
+|IP首部|ICMP首部|数据|
+|----|----|----|
+
+这里的数据也就是前面所说的时间戳。
+
+但是，当我们发送IP包的时候，却不用自己处理IP首部，IP首部由内核自己维护，首部中的协议字段被设置成调用 socket 函数时传递给它的第三个参数。
+
+我们发送 IP 包时，发送数据时从 IP 首部的第一个字节开始的，所以只需要构造一个如下所示的数据缓冲区就可以了。
+
+如果想自己处理 IP 首部，则需要设置 IP_HDRINCL 的 socket 选项，如下所示：
+
+```
+int flag = 1;
+setsocketopt(sockfd, IPPROTO_TO, IP_HDRINCL, &flag, sizeof(int));
+```
+
+最后介绍发送和接收 IP 包的两个函数：recvfrom 和 sendto。
+
+```
+#include <sys/socket.h>
+	ssize_t recvfrom(int sockfd, void * buff, size_t nbytes, int flags, struct sockaddr * from, socklen_t * addrlen);
+	ssize_t sendto(int sockfd, const void * buff, size_t nbytes, int flags,const struct sockaddr * to, socklen_t addrlen);
+```
+
+成功时返回读写的字节数，失败时返回-1。
+
+- sockfd参数：套接字描述符。
+- buff参数：指向读入或写出缓冲区的指针。
+- nbytes参数：读写字节数。
+- flags参数：本项目中设置为0。
+
+recvfrom 的 from 参数指向一个将由该函数在返回时填写数据发送者的地址信息的结构体，而该结构体中填写的字节数则放在 addrlen 参数所指的整数中。
+
+sendto 的 to 参数指向一个含有数据报接收者的地址信息的结构体，其大小由addrlen参数指定。
+
+###总结
+整个程序的流程如下：
+
+第一步，首先创建原始套接字。
+
+第二步，封装 ICMP 报文，向目的IP地址发送 ICMP 报文，1秒后接收 ICM P响应报文，并打印 TTL，RTT。
+
+第三步：循环第二步N次，本项目设置为5。
+
+第四步输出统计信息。
+
+完整代码:
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+#define ICMP_SIZE (sizeof(struct icmp))
+#define ICMP_ECHO 0
+#define ICMP_ECHOREPLY 0
+#define BUF_SIZE 1024
+#define NUM 5
+
+#define UCHAR unsigned char
+#define USHORT unsigned short
+#define UINT unsigned int
+
+struct icmp
+{
+    UCHAR type;               //类型
+    UCHAR code;               //代码
+    USHORT checksum;          //校验和
+    USHORT id;                //标识符
+    USHORT sequence;          //序列号
+    struct timeval timestamp; //时间戳
+};
+
+// IP首部数据结构
+struct ip
+{
+// 主机字节序判断
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+    UCHAR hlen : 4;    // 首部长度
+    UCHAR version : 4; // 版本
+#endif
+#if __BYTE_ORDER == __BIG_ENDIAN
+    UCHAR version : 4;
+    UCHAR hlen : 4;
+#endif
+    UCHAR tos;            //服务类型
+    USHORT len;           //总长度
+    USHORT id;            //标识符
+    USHORT offset;        //标志和片偏移
+    UCHAR ttl;            //生存时间
+    UCHAR protocol;       //协议
+    USHORT checksum;      //校验和
+    struct in_addr ipsrc; //32位源ip地址
+    struct in_addr ipdst; //32位目的ip地址
+};
+
+char buf[BUF_SIZE] = {0};
+
+//计算校验和
+USHORT checkSum(USHORT *, int);
+//计算时间差
+float timediff(struct timeval *, struct timeval *);
+//封装一个ICMP报文
+void pack(struct icmp *, int);
+// 对接收到的IP报文进行解包
+int unpack(char *, int, char *);
+
+int main(int argc, char *argv[])
+{
+    struct hostent *host;
+    struct icmp sendicmp;
+    struct sockaddr_in from;
+    struct sockaddr_in to;
+
+    int fromlen = 0;
+    int sockfd;
+    int nsend = 0;
+    int nreceived = 0;
+    in_addr_t inaddr;
+
+    memset(&from, 0, sizeof(struct sockaddr_in));
+    memset(&to, 0, sizeof(struct sockaddr_in));
+
+    if (argc < 2)
+    {
+        printf("use : %s hostname/IP address \n", argv[0]);
+        exit(1);
+    }
+
+    // 生成原始套接字
+    if((sockfd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP)) == -1){
+        printf("socket() error \n");
+        exit(1);
+    }
+
+    //设置目的地址信息
+    to.sin_family = AF_INET;
+
+    //判断是域名还是ip地址
+    if (inaddr = inet_addr(argv[1]) == INADDR_NONE)
+    {
+        //是域名
+        if ((host = gethostbyname(argv[1])) == NULL)
+        {
+            printf("gethostbyname() error \n");
+            exit(1);
+        }
+        to.sin_addr = *(struct in_addr *)host->h_addr_list[0];
+    }
+    else
+    {
+        //IP地址
+        to.sin_addr.s_addr = inaddr;
+    }
+
+    //输出域名ip地址信息
+    printf("ping %s (%s) : %d bytes of data.\n", argv[1], inet_ntoa(to.sin_addr), (int)ICMP_SIZE);
+
+    int n;
+    //循环发送报文、接收报文
+    for (int i = 0; i < NUM; i++)
+    {
+        nsend++; //发送次数加1
+        memset(&sendicmp, 0, ICMP_SIZE);
+        pack(&sendicmp, nsend);
+
+        //发送报文
+        if (sendto(sockfd, &sendicmp, ICMP_SIZE, 0, (struct sockaddr *)&to, sizeof(to)) == -1)
+        {
+            printf("sendto() error \n");
+            continue;
+        }
+
+        //接收报文
+        if ((n = recvfrom(sockfd, buf, BUF_SIZE, 0, (struct sockaddr *)&from, &fromlen)) < 0)
+        {
+            printf("recvform() error \n");
+            continue;
+        }
+        nreceived++; //接收次数加1
+        if (unpack(buf, n, inet_ntoa(from.sin_addr)) == -1)
+        {
+            printf("unpack() error \n");
+        }
+
+        sleep(1);
+    }
+}
+
+/**
+ * addr 指向需校验数据缓冲区的指针
+ * len  需校验数据的总长度（字节单位）
+ */
+USHORT checkSum(USHORT *addr, int len)
+{
+    UINT sum = 0;
+    while (len > 1)
+    {
+        sum += *addr++;
+        len -= 2;
+    }
+
+    // 处理剩下的一个字节
+    if (len == 1)
+    {
+        sum += *(UCHAR *)addr;
+    }
+
+    // 将32位的高16位与低16位相加
+    sum = (sum >> 16) + (sum & 0xffff);
+    sum += (sum >> 16);
+
+    return (USHORT)~sum;
+}
+
+/**
+ * 返回值单位：ms
+ * begin 开始时间戳
+ * end   结束时间戳
+ */
+float timediff(struct timeval *begin, struct timeval *end)
+{
+    int n;
+    // 先计算两个时间点相差多少微秒
+    n = (end->tv_sec - begin->tv_sec) * 1000000 + (end->tv_usec - begin->tv_usec);
+
+    // 转化为毫秒返回
+    return (float)(n / 1000);
+}
+
+/**
+ * icmp 指向需要封装的ICMP报文结构体的指针
+ * sequence 该报文的序号
+ */
+void pack(struct icmp *icmp, int sequence)
+{
+    icmp->type = ICMP_ECHO;
+    icmp->code = 0;
+    icmp->checksum = 0;
+    icmp->id = getpid();
+    icmp->sequence = sequence;
+    gettimeofday(&icmp->timestamp, 0);
+    icmp->checksum = checkSum((USHORT *)icmp, ICMP_SIZE);
+}
+
+/**
+ * buf  指向接收到的IP报文缓冲区的指针
+ * len  接收到的IP报文长度
+ * addr 发送ICMP报文响应的主机IP地址
+ */
+int unpack(char *buf, int len, char *addr)
+{
+    int i, ipHeadLen;
+    struct ip *ip;
+    struct icmp *icmp;
+    float rtt;          // 记录往返时间
+    struct timeval end; // 记录接收报文的时间戳
+
+    ip = (struct ip *)buf;
+
+    //计算ip首部长度，即ip首部的长度标识乘4
+    ipHeadLen = ip->hlen << 2;
+
+    //越过ip首部，指向ICMP报文
+    icmp = (struct icmp *)(buf + ipHeadLen);
+
+    // ICMP报文的总长度
+    len -= ipHeadLen;
+
+    //如果小于ICMP报文首部长度6
+    if (len < 8)
+    {
+        printf("ICMP packets\'s length is less than 8 \n");
+        return -1;
+    }
+
+    //确保是我们所发的ICMP ECHO回应
+    if (icmp->type != ICMP_ECHOREPLY ||
+        icmp->id != getpid())
+    {
+        printf("ICMP packets are not send by us \n");
+        return -1;
+    }
+
+    //计算往返时间
+    gettimeofday(&end, 0);
+    rtt = timediff(&icmp->timestamp, &end);
+
+    //打印ttl，rtt，seq
+    printf("%d bytes from %s : icmp_seq=%u ttl=%d rtt=%fms \n",
+           len, addr, icmp->sequence, ip->ttl, rtt);
+
+    return 0;
+
+```
+
+执行提示 socket() error 错误，也就是调用 socket 函数的时候出现了错误。这是因为我们创建的是原始套接字，原始套接字必须有 root 权限才能创建，所以我们可以加 sudo 执行。

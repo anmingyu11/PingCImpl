@@ -11,9 +11,9 @@ int main(void)
 	nets = htons(hosts);
 	netl = htonl(hostl);
 
-    printf("Host ordered short: %#x \n", hosts);
-    printf("Network ordered short: %#x \n", nets);
+	printf("Host ordered short: %#x \n", hosts);
+	printf("Network ordered short: %#x \n", nets);
 
-    printf("Host ordered long: %#lx \n", hostl);
-    printf("Network ordered long: %#lx \n", netl);
+	printf("Host ordered long: %#lx \n", hostl);
+	printf("Network ordered long: %#lx \n", netl);
 }
