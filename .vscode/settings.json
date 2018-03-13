@@ -1,9 +1,0 @@
-{
-    "files.associations": {
-        "stdio.h": "c",
-        "socket.h": "c",
-        "netdb.h": "c",
-        "time.h": "c",
-        "inet.h": "c"
-    }
-}
